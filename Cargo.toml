@@ -1,0 +1,11 @@
+[package]
+name = "table_finder"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+log = "0.4.18"
+simple_logger = "4.1.0"
+prettytable-rs = "0.10.0"
