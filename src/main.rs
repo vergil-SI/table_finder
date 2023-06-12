@@ -15,7 +15,10 @@ use prettytable::{Cell, Row, Table};
 const MAX_X: usize = 30;
 const MAX_Y: usize = 30;
 // 0x 00 00 xx yy
-const HDR_SIZE: usize = 4;
+const HDR_SIZE: usize = 3;
+const HDR_00_offset: usize = 0;
+const HDR_X_offset: usize = 1;
+const HDR_Y_offset: usize = 2;
 struct TableParms<'a> {
     x_val: u32,
     y_val: u32,
@@ -132,16 +135,15 @@ fn main() {
         let byte: u8 = bytes[offset];
 
         if (byte == 0)
-            && (usize::from(bytes[offset + 1]) == 0)
-            && (usize::from(bytes[offset + 2]) < MAX_X)
-            && (usize::from(bytes[offset + 2]) > 2)
-            && (usize::from(bytes[offset + 3]) < MAX_Y)
-            && (usize::from(bytes[offset + 3]) > 2)
+            && (usize::from(bytes[offset + HDR_X_offset]) < MAX_X)
+            && (usize::from(bytes[offset + HDR_X_offset]) > 2)
+            && (usize::from(bytes[offset + HDR_Y_offset]) < MAX_Y)
+            && (usize::from(bytes[offset + HDR_Y_offset]) > 2)
         {
             debug!("Eligible Table Location: 0x{:x}\n", offset);
 
-            let x_val: u32 = bytes[offset + 2] as u32;
-            let y_val: u32 = bytes[offset + 3] as u32;
+            let x_val: u32 = bytes[offset + HDR_X_offset] as u32;
+            let y_val: u32 = bytes[offset + HDR_Y_offset] as u32;
             debug!("Eligible Table x/y: 0x{:x} 0x{:x}\n", x_val, y_val);
             let table_start: u32 = offset as u32;
             let table_size: usize = calc_table_size(x_val, y_val);
@@ -179,7 +181,8 @@ fn main() {
                         table.size,
                         table.x_val,
                         table.y_val,
-                    );
+                    )
+                    .expect("file write failed!");
 
                     debug!("X-Axis{:x?}", x_axis);
                     debug!("Y-Axis{:x?}", y_axis);
@@ -208,7 +211,7 @@ fn main() {
 fn calc_table_size(x_val: u32, y_val: u32) -> usize {
     let mut size: u32 = 0x0;
     // 00 00 in front
-    size = size + 2;
+    size = size + 1;
     // row/column values
     size = size + 2;
     //initial data row
@@ -221,10 +224,6 @@ fn calc_table_size(x_val: u32, y_val: u32) -> usize {
     size as usize
 }
 
-fn get_applicable_bytes(table: TableParms) -> Vec<u8> {
-    let mut vec: Vec<u8> = Vec::new();
-    vec
-}
 fn get_vec_from_file(file_name: &String) -> std::io::Result<Vec<u8>> {
     let mut file = File::open(&file_name)?;
     let mut contents: Vec<u8> = Vec::new();
