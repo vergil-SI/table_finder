@@ -24,6 +24,7 @@ struct TableParms<'a> {
     y_val: u32,
     start: u32,
     size: usize,
+    count: u32,
     data_slice: &'a [u8],
 }
 impl<'a> TableParms<'a> {
@@ -55,40 +56,33 @@ impl<'a> TableParms<'a> {
     fn get_table_end(&self) -> u32 {
         (self.start + self.size as u32) as u32
     }
-    fn check_table_validity(&self) -> &'a Result<bool, &'static str> {
+    fn check_table_validity(&self) -> &'a Result<(), &'static str> {
         let x_slice: &[u8] = &self.data_slice[HDR_SIZE..(HDR_SIZE + self.x_val as usize)];
-        let mut prev_val: &u8 = &0;
-        for val in x_slice {
-            debug!("prev_val {:?}, new_val {:?}", prev_val, val);
-            debug!("VALID X Axis! {:?}", x_slice);
-            if val > prev_val || (prev_val == &0) {
-                prev_val = val;
-                continue;
-            } else {
-                return &Err("Table Invalid on X-Axis\n");
+
+        match test_axis_goes_increasing(x_slice, "X") {
+            Ok(()) => {}
+            Err(e) => {
+                debug!("{}", e);
+                return &Err("Table Invalid");
             }
         }
         debug!("VALID X Axis! {:?}", x_slice);
         let rest_of_slice: &[u8] = &self.data_slice[(HDR_SIZE + self.x_val as usize)..];
         debug!("rest of slice {:x?}", rest_of_slice);
         debug!("stepsize 0x{:x}", (self.y_val + 1));
-        let result: Vec<_> = rest_of_slice
+        let y_axis: Vec<_> = rest_of_slice
             .iter()
             .step_by((self.x_val + 1) as usize)
             .copied()
             .collect();
-        let mut prev_y: u8 = 0;
-        for local_y_val in result {
-            if local_y_val > prev_y {
-                prev_y = local_y_val;
-                continue;
-            } else {
-                return &Err("Table Invalid on X-Axis\n");
+        match test_axis_goes_increasing(y_axis.as_slice(), "Y") {
+            Ok(()) => {}
+            Err(e) => {
+                debug!("{}", e);
+                return &Err("Table Invalid");
             }
         }
-        //info!("VALID Both Axis!");
-
-        &Ok(true)
+        &Ok(())
     }
 
     fn print_table(&self) {
@@ -123,6 +117,7 @@ impl<'a> TableParms<'a> {
 }
 
 fn main() {
+    let mut tables: Vec<TableParms> = Vec::new();
     simple_logger::init_with_level(log::Level::Info).unwrap();
     let mut valid_count: u32 = 0;
     let args: Vec<String> = env::args().collect();
@@ -130,18 +125,36 @@ fn main() {
     let output_file_path = &args[2];
     let mut output_file = File::create(output_file_path).expect("Ouput file couldn't open.");
     let bytes: Vec<u8> = get_vec_from_file(file_path).expect("File Read Failure");
+    let mut table_so_skip = true;
+    let mut skip_idx = 0;
+    let mut prev_table_size = 0;
 
-    for offset in 0..bytes.len() - 10 {
+    //Search for a table at every byte in the entire binary.
+    for offset in 0..bytes.len() - 4 {
+        //loop skipping logic so that we don't accidentally find tables within tables.
+        //Which is sometimes likely on large tables.
+        if table_so_skip {
+            if skip_idx < prev_table_size {
+                skip_idx += 1;
+                continue;
+            } else {
+                table_so_skip = false;
+                skip_idx = 0;
+                prev_table_size = 0;
+            }
+        }
         let byte: u8 = bytes[offset];
 
+        //Tables usually appear with the following 'format'. Values are number of bytes for each .
+        // |1|-1-|-1-|--X---|----1----|--Y--|----1----|--Y--|
+        // |0|X  |Y  |X-axis|Y-axis[0]|Row_0|Y-axis[1]|Row_1|.....Y-Axis[n]|Row_n
         if (byte == 0)
             && (usize::from(bytes[offset + HDR_X_offset]) < MAX_X)
-            && (usize::from(bytes[offset + HDR_X_offset]) > 2)
+            && (usize::from(bytes[offset + HDR_X_offset]) > 1)//Ignore tables smaller than 2x2. Too many false positives.
             && (usize::from(bytes[offset + HDR_Y_offset]) < MAX_Y)
-            && (usize::from(bytes[offset + HDR_Y_offset]) > 2)
+            && (usize::from(bytes[offset + HDR_Y_offset]) > 1)
         {
             debug!("Eligible Table Location: 0x{:x}\n", offset);
-
             let x_val: u32 = bytes[offset + HDR_X_offset] as u32;
             let y_val: u32 = bytes[offset + HDR_Y_offset] as u32;
             debug!("Eligible Table x/y: 0x{:x} 0x{:x}\n", x_val, y_val);
@@ -156,13 +169,14 @@ fn main() {
             let table_end: usize = table_start as usize + table_size;
 
             let copy_of_bytes: Vec<u8> = bytes.clone();
-            let table_slice: &[u8] = &copy_of_bytes[offset..table_end];
+            let table_slice: &[u8] = &bytes[offset..table_end];
 
             let table: TableParms = TableParms {
                 x_val,
                 y_val,
                 start: table_start,
                 size: table_size,
+                count: valid_count,
                 data_slice: table_slice,
             };
 
@@ -173,6 +187,8 @@ fn main() {
             let res = table.check_table_validity();
             match res {
                 Ok(v) => {
+                    table_so_skip = true;
+                    prev_table_size = table.size;
                     write!(
                         output_file,
                         "Valid Table! 0x{:x?} 0x{:x?} 0x{:x?} 0x{:x?} 0x{:x?}\n",
@@ -188,7 +204,6 @@ fn main() {
                     debug!("Y-Axis{:x?}", y_axis);
                     debug!("Rows:\n {:x?}", rows);
                     valid_count = valid_count + 1;
-
                     info!(
                         "Valid Table! Address: 0x{:x?} End: 0x{:x?} Length: 0x{:x?} X-Axis: 0x{:x?} Y-Axis: 0x{:x?} \nCount: {:}",
                         table.start,
@@ -199,13 +214,19 @@ fn main() {
                         valid_count,
                     );
                     table.print_table();
-                    info!("\n")
+
+                    tables.push(table);
+                    print!("\n")
                 }
                 Err(e) => debug!("{}", e),
             }
         }
     }
-
+    tables.sort_by(|a, b| a.x_val.cmp(&b.x_val));
+    for table in tables {
+        info!("Address: {} Count: {}\n", table.start, table.count);
+        table.print_table();
+    }
     return;
 }
 fn calc_table_size(x_val: u32, y_val: u32) -> usize {
@@ -229,4 +250,20 @@ fn get_vec_from_file(file_name: &String) -> std::io::Result<Vec<u8>> {
     let mut contents: Vec<u8> = Vec::new();
     file.read_to_end(&mut contents)?;
     Ok(contents)
+}
+fn test_axis_goes_increasing(axis: &[u8], axis_name: &str) -> Result<(), &'static str> {
+    let mut prev_val: &u8 = &0;
+    let mut first_zero = true;
+    for val in axis {
+        debug!("prev_val {:?}, new_val {:?}", prev_val, val);
+        if val > prev_val || (prev_val == &0 && first_zero == true) {
+            first_zero = false;
+            prev_val = val;
+            continue;
+        } else {
+            debug!("{:} Axis Invalid!", axis_name);
+            return Err("Axis Invalid");
+        }
+    }
+    Ok(())
 }
