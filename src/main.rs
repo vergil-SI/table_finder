@@ -7,6 +7,7 @@ use std::fs::File;
 use std::io::Read;
 use std::io::Write;
 use std::mem;
+use std::process::exit;
 use std::vec;
 #[macro_use]
 extern crate prettytable;
@@ -15,10 +16,10 @@ use prettytable::{Cell, Row, Table};
 const MAX_X: usize = 30;
 const MAX_Y: usize = 30;
 // 0x 00 00 xx yy
-const HDR_SIZE: usize = 3;
+const HDR_SIZE: usize = 2;
 const HDR_00_offset: usize = 0;
-const HDR_X_offset: usize = 1;
-const HDR_Y_offset: usize = 2;
+const HDR_X_offset: usize = 0;
+const HDR_Y_offset: usize = 1;
 struct TableParms<'a> {
     x_val: u32,
     y_val: u32,
@@ -117,20 +118,35 @@ impl<'a> TableParms<'a> {
 }
 
 fn main() {
-    let mut tables: Vec<TableParms> = Vec::new();
     simple_logger::init_with_level(log::Level::Info).unwrap();
-    let mut valid_count: u32 = 0;
     let args: Vec<String> = env::args().collect();
     let file_path: &String = &args[1];
     let output_file_path = &args[2];
-    let mut output_file = File::create(output_file_path).expect("Ouput file couldn't open.");
+
     let bytes: Vec<u8> = get_vec_from_file(file_path).expect("File Read Failure");
+    let mut output_file = File::create(output_file_path).expect("Ouput file couldn't open.");
+
     let mut table_so_skip = true;
     let mut skip_idx = 0;
-    let mut prev_table_size = 0;
+    let mut prev_table_size: usize = 0;
 
+    let mut max_address: usize = 0;
+
+    let mut tables: Vec<TableParms> = Vec::new();
+    let mut valid_count: u32 = 0;
+
+    if args.len() > 3 {
+        if &args[3][0..2] != "0x" {
+            print! {"Invalid format for hex_string. Please Use 0x<VALUE>\n"};
+            return;
+        }
+        max_address = usize::from_str_radix(&args[3][2..], 16)
+            .expect("Invalid hex format for max range. Use 0xVALUE");
+    } else {
+        max_address = bytes.len();
+    }
     //Search for a table at every byte in the entire binary.
-    for offset in 0..bytes.len() - 4 {
+    for offset in 0..max_address - 4 {
         //loop skipping logic so that we don't accidentally find tables within tables.
         //Which is sometimes likely on large tables.
         if table_so_skip {
@@ -146,10 +162,9 @@ fn main() {
         let byte: u8 = bytes[offset];
 
         //Tables usually appear with the following 'format'. Values are number of bytes for each .
-        // |1|-1-|-1-|--X---|----1----|--Y--|----1----|--Y--|
-        // |0|X  |Y  |X-axis|Y-axis[0]|Row_0|Y-axis[1]|Row_1|.....Y-Axis[n]|Row_n
-        if (byte == 0)
-            && (usize::from(bytes[offset + HDR_X_offset]) < MAX_X)
+        // |-1-|-1-|--X---|----1----|--Y--|----1----|--Y--|
+        // |X  |Y  |X-axis|Y-axis[0]|Row_0|Y-axis[1]|Row_1|.....Y-Axis[n]|Row_n
+        if (usize::from(bytes[offset + HDR_X_offset]) < MAX_X)
             && (usize::from(bytes[offset + HDR_X_offset]) > 1)//Ignore tables smaller than 2x2. Too many false positives.
             && (usize::from(bytes[offset + HDR_Y_offset]) < MAX_Y)
             && (usize::from(bytes[offset + HDR_Y_offset]) > 1)
@@ -224,15 +239,13 @@ fn main() {
     }
     tables.sort_by(|a, b| a.x_val.cmp(&b.x_val));
     for table in tables {
-        info!("Address: {} Count: {}\n", table.start, table.count);
+        info!("Address: {:x?} Count: {}\n", table.start, table.count);
         table.print_table();
     }
     return;
 }
 fn calc_table_size(x_val: u32, y_val: u32) -> usize {
     let mut size: u32 = 0x0;
-    // 00 00 in front
-    size = size + 1;
     // row/column values
     size = size + 2;
     //initial data row
